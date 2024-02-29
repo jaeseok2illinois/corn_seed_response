@@ -1,0 +1,556 @@
+---
+title: "Do farmers over apply corn seed regardless the weather condition in U.S.?"
+author: "Jaeseok Hwang"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+
+## Set up
+
+
+```{r, cache = F, echo = F, results = "hide"}
+#####
+
+library(knitr)
+
+knitr::opts_chunk$set(
+  cache = FALSE,
+  echo = FALSE,
+  warning = FALSE,
+  cache.lazy = FALSE,
+  fig.retina = 6,
+  fig.height = 9,
+  fig.width = 9,
+  message = FALSE,
+  error = TRUE
+)
+
+options(knitr.duplicate.label = "allow")
+
+```
+
+```{r colors and table width, cache = TRUE, results = "hide"}
+
+colorize <- function(x, color) {
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{%s}", color, x)
+  } else if (knitr::is_html_output()) {
+    sprintf("<span style='color: %s;'>%s</span>", color,
+      x)
+  } else x
+}
+
+FitFlextableToPage <- function(ft, pgwidth = 6){
+
+  ft_out <- ft %>% autofit()
+
+  ft_out <- width(ft_out, width = dim(ft_out)$widths*pgwidth /(flextable_dim(ft_out)$widths))
+  return(ft_out)
+}
+
+```
+
+#### Packages 
+
+```{r pacakages, cache = FALSE, results = "hide"}
+
+library(sf)
+library(ggplot2)
+library(tmap)
+library(ggcorrplot)
+library(patchwork)
+library(flextable)
+library(officer)
+library(parallel)
+library(tidyverse)
+library(corrplot)
+library(data.table)
+library(GWmodel)
+library(ggridges)
+library(vtable)
+library(stargazer)
+library(mgcv)
+library(xgboost)
+library(caret)  
+library(e1071)  
+library(DiagrammeR)
+library(grf)
+library(gstat)
+library(viridis)
+library(summarytools)
+library(elevatr)
+
+```
+
+
+
+```{r preparations, cache = T, results = "hide"}
+ 
+source("/Users/hwangjaeseok/Library/CloudStorage/Box-Box/DIFM_HQ/Codes/DIFM/Functions/prepare.R")
+
+
+```
+
+```{r map-layout, cache = TRUE, results = "hide"}
+tm_layout_to_add <- tm_layout(
+  legend.outside = "TRUE",
+  frame = FALSE,
+  legend.title.size = 2,
+  legend.text.size = 1.5
+)
+```
+
+
+```{r anal functions, cache = TRUE, results = "hide"}
+
+field_vars <- c('elev','slope','curv','tpi', 'clay', 'sand', 
+                         'silt', 'water_storage')
+ 
+ 
+```
+ 
+
+```{r, echo = T, results = "hide"}
+
+
+
+field_data <- jsonlite::fromJSON(
+  file.path("/Users/hwangjaeseok/Library/CloudStorage/Box-Box/DIFM_HQ/Data/CommonData/field_parameter.json"),
+  flatten = TRUE
+) %>%
+  data.table() %>%
+  .[, field_year := paste(farm, field, year, sep = "_")]
+
+#--- get the soybean data fields ---#
+field_year_ls <- field_data[crop=="corn"]$field_year
+
+
+### Check the data process status by fields ####
+
+analysis_c <- c()
+yield_c <- c()
+
+for (i in 1:length(field_year_ls)) {
+  ffy <- field_year_ls[i]
+  
+path <- paste0("/Users/hwangjaeseok/Library/CloudStorage/Box-Box/DIFM_HQ/Data/Growers/", ffy)
+  
+  # List files in the specified directory that match the pattern
+ analysis_dt <- list.files(path = path, pattern = "analysis_data", ignore.case = TRUE, recursive = TRUE)
+ 
+  yield_dt <- list.files(path = path, pattern = "yield.*\\.shp", ignore.case = TRUE, recursive = TRUE)
+ 
+   if (length(analysis_dt) > 0) {
+    # Store the matching files in the list
+    analysis_c[i] <- ffy
+   }
+    if (length(yield_dt) > 0) {
+    # Store the matching files in the list
+    yield_c[i] <- ffy
+  }
+  
+}
+
+analysis_corn <- analysis_c[!is.na(analysis_c)]
+yield_corn <- yield_c[!is.na(yield_c)]
+
+mat_dat <-match(analysis_corn,yield_corn)
+
+### Check the filed where yield data exists but data has not been
+### processed
+
+yield_corn[-mat_dat]
+
+
+###
+analysis_sb <- analysis_corn[-c(38,50)]
+   
+
+        
+        
+```  
+
+
+```{r , echo = F, results = "hide"}
+
+#### Check the seed data 
+
+# crop_price <- 9
+# input_price <- 0.3214
+# 
+# opt_ur_list =  opt_vr_list =  map_data_list = map_EOIR_cf_list =  pred_list<- list()
+#  
+# #12,26,36,37.45
+# exclude_cols <- c(9,11,12,14,20, 26,27, 32,35,36, 37,38,41,42, 45,48)
+# # Get the indices of columns to include
+# include_cols <- setdiff(1:length(analysis_sb), exclude_cols)
+# 
+# 
+# 
+# ####  GAM regression ####
+# 
+#   formula <- paste0(
+#       "yield ~ s(s_rate, k = 4) + s(X, k = 5) + s(Y, k = 5) + te(X, Y, k = c(5, 5))",
+#       ifelse(
+#         length(field_vars) > 0,
+#         paste0(" + ", paste0(field_vars, collapse = " + ")),
+#         ""
+#       )
+#     ) %>% formula()
+# 
+# 
+# 
+# ######
+# 
+# 
+# data_anal_list = eval_data_list = opt_input_list = status_quo_list <- list()
+# 
+#   for(i in include_cols){
+# 
+#       ffy <- analysis_sb[i]
+# 
+# 
+#      if(file.exists(paste0("/Users/hwangjaeseok/Library/CloudStorage/Box-Box/DIFM_HQ/Data/Growers/",ffy,"/Analysis-Ready/analysis_data.rds"))){
+#        
+#              source("/Users/hwangjaeseok/Desktop/DIFM/DIFM/Functions/unpack_field_parameters.R")
+#      
+#         data_sf <- readRDS(paste0("/Users/hwangjaeseok/Library/CloudStorage/Box-Box/DIFM_HQ/Data/Growers/",ffy,"/Analysis-Ready/analysis_data.rds")) %>%
+#           setnames(names(.), tolower(names(.))) %>% 
+#             cbind(., st_coordinates(st_centroid(.))) 
+# 
+#       
+#       data_sf <- data_sf %>%
+#     rename_with(~ if_else(grepl("elevation|file", .), "elev",
+#                      if_else(grepl("wtr_str", .), "water_storage", 
+#                           if_else(grepl("ec02", .), "ecs",   
+#                     if_else(grepl("_rate", .), "s_rate", 
+#                       if_else(grepl("yield_vol", .), "yield", .))))))
+# 
+#    data_sf$farm  <- str_split(analysis_sb[i], pattern='_')[[1]][1]
+#    data_sf$field  <- str_split(analysis_sb[i], pattern='_')[[1]][2]
+#    data_sf$year  <- str_split(analysis_sb[i], pattern='_')[[1]][3]
+#    data_sf$exp_id <- analysis_sb[i]
+# 
+# 
+#    
+#    
+#    analysis_res_g <- trial_info %>% 
+#   left_join(crop_price_table, by = "crop") %>% 
+#   mutate(data = rep(list(data_sf), nrow(.))) %>% 
+#   rowwise() %>% 
+#   mutate(
+#     data = list(
+#       setnames(
+#         data.table::copy(data),
+#         paste0(tolower(input_type), "_rate"),
+#         "input_rate"
+#       )
+#     )
+#   ) %>%  
+#   mutate(
+#     field_vars = list(
+#       field_vars 
+#     )
+#   ) %>% 
+#   mutate(
+#     data = list(
+#       gen_y_res(data, field_vars)
+#     )
+#   ) %>% 
+#   mutate(
+#     data = list(
+#       run_gwr(subset(data, input_rate != 0), "input_rate")  
+#     )
+#   ) 
+# 
+# 
+#    
+#    
+#    
+#    analysis_res_m <- analysis_res_g %>% 
+#   mutate(
+#     data = list(
+#       define_mz(
+#         data = data, 
+#         max_num_zones = 1, 
+#         min_obs = 300
+#       ) 
+#     )
+#   )
+# 
+# analysis_res_gam <- analysis_res_m %>% 
+#   mutate(gam_res = list(
+#     run_scam_gam(data = data, field_vars = field_vars)
+#   ))   
+# 
+# analysis_res_e <- analysis_res_gam %>% 
+#   #=== single average observation by zone ===#
+#   mutate(data_for_eval = list(
+#     make_data_for_eval(
+#       data = data,
+#       est = gam_res
+#     )
+#   )) %>% 
+#   #=== input rate sequence by zone to be tested ===#
+#   mutate(input_rate_seq = list(
+#     data.table(data)[, .(
+#       input_rate = seq(
+#         quantile(input_rate, 0.025),
+#         quantile(input_rate, 0.975),
+#         length = 100
+#       )
+#     ),
+#     by = zone_txt]
+#   )) %>% 
+#   #=== predict yield values at different input rates ===#
+#   mutate(eval_data = list(
+#     predict_yield_range(
+#       data_for_eval = data_for_eval, 
+#       input_rate_seq = input_rate_seq,
+#       est = gam_res
+#     ) %>% 
+#     .[, type := "opt_v"]%>% 
+#     .[, .(
+#       input_rate, zone_txt, type, yield_hat, yield_hat_se
+#     )]
+#   )) %>% 
+#   #=== Adjust yield values to match up with actual yields (this is purely for figures below) ===#
+#   mutate(
+#     #=== mean predicted yield ===#
+#     mean_yield_hat_opt = 
+#     list(
+#       eval_data[, .(mean_yield_hat = mean(yield_hat)), by = zone_txt]
+#     ), 
+#     #=== mean actual yield by zone ===#
+#     mean_yield_actual = 
+#     list(
+#       data.table(data)[, 
+#       .(mean_yield_actual = mean(yield)), 
+#       by = zone_txt
+#       ]
+#     ),
+#     #=== shift yield so that figures look ===#
+#     yield_shift_opt = 
+#     list(
+#       mean_yield_actual[mean_yield_hat_opt, on = "zone_txt"] %>% 
+#         .[, yield_shift :=  mean_yield_actual - mean_yield_hat] %>% 
+#         .[, .(zone_txt, yield_shift)]
+#     ),
+#     eval_data = 
+#     list(
+#       eval_data %>% 
+#       yield_shift_opt[., on = "zone_txt"] %>% 
+#       .[, yield_hat := yield_hat + yield_shift] %>% 
+#       .[, profit_hat := crop_price * yield_hat - price * input_rate] %>% 
+#       .[, profit_hat_se := crop_price * yield_hat_se] 
+#     )
+#   ) %>% 
+#   dplyr::select(
+#     - mean_yield_hat_opt, 
+#     - yield_shift_opt, 
+#     - mean_yield_actual
+#   ) %>% 
+#   mutate(opt_input_data = list(
+#    opt_input_data <- eval_data %>% 
+#     .[, .SD[profit_hat == max(profit_hat), ], by = zone_txt] %>% 
+#     setnames("input_rate", "opt_input") 
+#   )) %>% 
+#   #=== assign optimal variable input rate to the data ===#
+#   mutate(data = list(
+#     left_join(
+#       data, 
+#       opt_input_data,
+#       by = "zone_txt"
+#     )
+#   )) 
+# 
+#  }
+#       
+# data_anal_list[[i]] <- data_sf      
+# eval_data_list[[i]] <- analysis_res_e$eval_data[[1]]
+# opt_input_list[[i]] <- analysis_res_e$opt_input_data[[1]]
+# status_quo_list[[i]] <- analysis_res_e$gc_rate[[1]] 
+#     
+# }
+# 
+# 
+# saveRDS(eval_data_list, "/Users/hwangjaeseok/Library/CloudStorage/Box-Box/DIFM_HQ/Codes/Codes_indiv/JH/eval_data_list.rds")
+# 
+# 
+# saveRDS(opt_input_list, "/Users/hwangjaeseok/Library/CloudStorage/Box-Box/DIFM_HQ/Codes/Codes_indiv/JH/opt_input_list.rds")
+# 
+# saveRDS(status_quo_list, "/Users/hwangjaeseok/Library/CloudStorage/Box-Box/DIFM_HQ/Codes/Codes_indiv/JH/status_quo_list.rds")
+# 
+# saveRDS(data_anal_list, "/Users/hwangjaeseok/Library/CloudStorage/Box-Box/DIFM_HQ/Codes/Codes_indiv/JH/data_anal_list.rds")
+
+```
+
+```{r yield_response_curve ,echo=T, include = TRUE}
+
+analysis_sb <-readRDS("/Users/hwangjaeseok/Library/CloudStorage/Box-Box/DIFM_HQ/Codes/Codes_indiv/JH/analysis_sb.rds")
+
+
+eval_data_list<-readRDS("/Users/hwangjaeseok/Library/CloudStorage/Box-Box/DIFM_HQ/Codes/Codes_indiv/JH/eval_data_list.rds")
+
+
+opt_input_list <- readRDS( "/Users/hwangjaeseok/Library/CloudStorage/Box-Box/DIFM_HQ/Codes/Codes_indiv/JH/opt_input_list.rds")
+
+status_quo_list <- readRDS( "/Users/hwangjaeseok/Library/CloudStorage/Box-Box/DIFM_HQ/Codes/Codes_indiv/JH/status_quo_list.rds")
+
+data_anal_list <- readRDS( "/Users/hwangjaeseok/Library/CloudStorage/Box-Box/DIFM_HQ/Codes/Codes_indiv/JH/data_anal_list.rds")
+
+plot_list<- list()
+
+
+ exclude_cols <- c(9,11,12,14,20, 26,27, 32,35,36, 37,38,41,42, 45,48)
+# # Get the indices of columns to include
+ include_cols <- setdiff(1:length(analysis_sb), exclude_cols)
+
+
+
+# Iterate over each treatment data
+for (i in include_cols) {
+  # Create the yield-seed response curve
+  s_rate_range <- range(eval_data_list[[i]]$input_rate, na.rm = TRUE)
+  opt_seed <- opt_input_list[[i]]$opt_input
+  status_quo <- status_quo_list[[i]]
+# Create the yield-seed curve plot
+yield_seed_curve <- ggplot(data_anal_list[[i]], aes(x = s_rate, y = yield)) +
+  geom_point() +
+  geom_point(data=eval_data_list[[i]], aes(x=input_rate, y= yield_hat),col='pink',size=0.5) +
+ geom_vline(xintercept = opt_seed, color = "green", linetype = "dashed",
+            lwd=1) +
+ geom_vline(xintercept = status_quo, color = "blue", linetype = "dashed",
+            lwd=1) +
+  geom_smooth(method = "lm", formula = y ~ poly(x, 2), se = FALSE, color='yellow',lwd=0.5) +
+  labs(title = paste(analysis_sb[i], "Yield-Seed Response"),
+       x = "Seed(k/ac)", y = "Yield(bu/ac)") +
+  xlim(s_rate_range) + # Set x-axis limits
+  annotate("text", x = opt_seed, y = max(data_anal_list[[i]]$yield), 
+           label = "opt_seed", color = "green", fontface = "italic") +
+   annotate("text", x = status_quo, y = max(data_anal_list[[i]]$yield), 
+           label = "status_quo", color = "blue", fontface = "italic")
+ 
+
+plot_list[[i]] <- yield_seed_curve
+
+}
+
+saveRDS(plot_list, "/Users/hwangjaeseok/Library/CloudStorage/Box-Box/DIFM_HQ/Codes/Codes_indiv/JH/plot_list.rds")
+
+
+split_and_create_df <- function(element) {
+  parts <- unlist(strsplit(element, "_"))
+  df <- data.frame(farm = parts[1], field = parts[2], year = as.integer(parts[3]))
+  return(df)
+}
+
+# Applying the function to each element of the list and combining into a single data frame
+farm_df <- do.call(rbind, lapply(analysis_sb, split_and_create_df))
+
+
+# Find rows with same farm and field
+duplicate_rows <- farm_df[duplicated(farm_df [, c("farm", "field")]) | duplicated(farm_df[, c("farm", "field")], fromLast = TRUE), ]
+
+# Print the duplicate rows
+print(duplicate_rows)
+
+# Hord_F98 2020, 2022   (4, 34)
+# Wendte_LaueLib80, 2018, 2020, 2022  (15,10,29)
+# Nelson_DougsHome 2020, 2022 (8,30)
+# CLC_JOEB 2021, 2023  (24,42)
+
+
+library(gridExtra)
+
+# Assuming you have ggplot objects stored in plot_list
+
+# Group indices for each row
+row1_indices <- c(4, 34)
+row2_indices <- c(10, 29)
+row3_indices <- c(8, 30)
+row4_indices <- c(24,42)
+# Create lists of titles corresponding to each row
+row_titles <- c("Hord_F98", "Wendte_LaueLib80", "Nelson_DougsHome","CLC_JOEB")
+
+# Select ggplot objects based on indices
+row1_plots <- plot_list[row1_indices]
+row2_plots <- plot_list[row2_indices]
+row3_plots <- plot_list[row3_indices]
+row4_plots <- plot_list[row4_indices]
+
+# Arrange plots in a grid layout
+grid.arrange(
+  arrangeGrob(grobs = row1_plots, nrow = 1),
+  arrangeGrob(grobs = row2_plots, nrow = 1),
+  arrangeGrob(grobs = row3_plots, nrow = 1),
+    arrangeGrob(grobs = row4_plots, nrow = 1),
+
+  top = row_titles,
+  ncol = 1
+)
+
+```
+
+```{r selected farms ,echo=T, include = TRUE}
+
+
+# Initialize a dataframe to store the data
+table_data <- data.frame("Field" = character(length(include_cols)),
+                          "Opt Seed" = numeric(length(include_cols)),
+                            "Sq Seed"  = numeric(length(include_cols)),
+                         "Opt Yield" = numeric(length(include_cols)),
+                          "Sq Yield" = numeric(length(include_cols)),
+                          "Opt Revenue" = numeric(length(include_cols)),
+                         "Sq Revenue" = numeric(length(include_cols)))
+
+# Loop through the data
+
+eval_data_list2 <-eval_data_list[include_cols]
+status_quo_list2 <-status_quo_list[include_cols]
+opt_input_list2 <-opt_input_list[include_cols]
+
+differences <- data.frame("Field" = character(length(include_cols)),
+                          "Seed Differences" = numeric(length(include_cols)))
+
+
+for (i in 1:32 ) {
+  # Extract data for the input rates
+  opt_input_data <- eval_data_list2[[i]][eval_data_list2[[i]]$input_rate == opt_input_list2[[i]]$opt_input, ]
+  status_quo_data <- eval_data_list2[[i]][which.min(abs(eval_data_list2[[i]]$input_rate - status_quo_list2[[i]])), ]
+  field_include <- analysis_sb[include_cols][i]
+  
+  # Assign values to the dataframe
+  table_data[i, 1] <- field_include
+  table_data[i, 2] <- round(opt_input_data$input_rate,0)
+  table_data[i, 4] <- round(opt_input_data$yield_hat,0)
+  table_data[i, 6] <- round(opt_input_data$profit_hat,0)
+  table_data[i, 3] <- round(status_quo_data$input_rate,0)
+  table_data[i, 5] <- round(status_quo_data$yield_hat,0)
+  table_data[i, 7] <- round(status_quo_data$profit_hat,0)
+  
+  differences[i,1] <- field_include
+  differences[i,2] <- opt_input_data$input_rate - status_quo_data$input_rate
+
+}
+
+# Output the data table using knitr::kable()
+knitr::kable(table_data, format = "markdown")
+
+# Plot histogram of differences
+knitr::kable(differences, format = "markdown")
+
+ 
+```
+
+## DIFM SOYBEAN DATA RESEARCH ( 2018 ~ 2023)
+
+- Total 72 soybean fields trials conducted ( contains seed and yield data)
+- 58 trials data were processed 
+- 54 trials data has analysis-ready data
+-  48 out of 54 trials are completed running multi-arm causal forest analysis.
+
